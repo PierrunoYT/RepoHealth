@@ -17,6 +17,12 @@ headers = {
     'Accept': 'application/vnd.github.v3+json'
 }
 
+def search_repos(query, sort='updated', order='asc', per_page=100):
+    """Suche nach Repositories basierend auf einer Abfrage"""
+    url = f'{BASE_URL}/search/repositories?q={query}&sort={sort}&order={order}&per_page={per_page}'
+    response = requests.get(url, headers=headers)
+    return response.json()['items'] if response.status_code == 200 else []
+
 def get_repo_info(owner, repo):
     """Hole Informationen über ein Repository"""
     url = f'{BASE_URL}/repos/{owner}/{repo}'
@@ -39,33 +45,32 @@ def is_repo_broken(repo_info):
     if not repo_info:
         return False
 
-    # Ein Repository gilt als möglicherweise defekt, wenn es offene Issues hat,
-    # aber keine Commits in den letzten 6 Monaten
     last_push = datetime.strptime(repo_info['pushed_at'], '%Y-%m-%dT%H:%M:%SZ')
     now = datetime.utcnow()
-    has_open_issues = repo_info['open_issues_count'] > 0
+    has_open_issues = repo_info['open_issues_count'] > 10
     no_recent_commits = (now - last_push) > timedelta(days=180)
 
     return has_open_issues and no_recent_commits
 
-def check_repository(owner, repo):
+def check_repository(repo_info):
     """Überprüfe ein Repository auf Veralterung und mögliche Defekte"""
-    repo_info = get_repo_info(owner, repo)
-    if not repo_info:
-        print(f"Konnte keine Informationen für {owner}/{repo} abrufen.")
-        return
-
     if is_repo_outdated(repo_info):
-        print(f"{owner}/{repo} scheint veraltet zu sein. Letzter Push: {repo_info['pushed_at']}")
+        print(f"{repo_info['full_name']} scheint veraltet zu sein. Letzter Push: {repo_info['pushed_at']}")
     
     if is_repo_broken(repo_info):
-        print(f"{owner}/{repo} könnte defekt sein. Es hat offene Issues, aber keine kürzlichen Commits.")
+        print(f"{repo_info['full_name']} könnte defekt sein. Es hat offene Issues, aber keine kürzlichen Commits.")
+    
+    print(f"  Sterne: {repo_info['stargazers_count']}")
+    print(f"  Offene Issues: {repo_info['open_issues_count']}")
+    print(f"  URL: {repo_info['html_url']}")
+    print()
 
 def main():
-    # Beispiel-Verwendung
-    check_repository('octocat', 'Hello-World')
-    check_repository('microsoft', 'vscode')
-    # Fügen Sie hier weitere Repositories hinzu, die Sie überprüfen möchten
+    query = 'stars:>100'  # Beispiel: Repos mit mehr als 100 Sternen
+    repos = search_repos(query)
+    
+    for repo in repos:
+        check_repository(repo)
 
 if __name__ == "__main__":
     main()
