@@ -1,15 +1,14 @@
 import requests
 from datetime import datetime, timedelta
 import os
+import time
+import argparse
+import json
 from dotenv import load_dotenv
 
-# Lade Umgebungsvariablen aus .env Datei
 load_dotenv()
 
-# GitHub API Token aus Umgebungsvariablen holen
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
-
-# GitHub API Basis-URL
 BASE_URL = 'https://api.github.com'
 
 headers = {
@@ -17,60 +16,90 @@ headers = {
     'Accept': 'application/vnd.github.v3+json'
 }
 
-def search_repos(query, sort='updated', order='asc', per_page=100):
-    """Suche nach Repositories basierend auf einer Abfrage"""
-    url = f'{BASE_URL}/search/repositories?q={query}&sort={sort}&order={order}&per_page={per_page}'
+def make_request(url):
+    """Führe eine API-Anfrage durch und behandle Ratenbegrenzungen"""
     response = requests.get(url, headers=headers)
+    if response.status_code == 403 and 'X-RateLimit-Remaining' in response.headers:
+        if int(response.headers['X-RateLimit-Remaining']) == 0:
+            reset_time = int(response.headers['X-RateLimit-Reset'])
+            sleep_time = reset_time - int(time.time()) + 1
+            print(f"API-Limit erreicht. Warte für {sleep_time} Sekunden...")
+            time.sleep(sleep_time)
+            return make_request(url)
+    return response
+
+def search_repos(query, sort='updated', order='asc', per_page=100):
+    url = f'{BASE_URL}/search/repositories?q={query}&sort={sort}&order={order}&per_page={per_page}'
+    response = make_request(url)
     return response.json()['items'] if response.status_code == 200 else []
 
 def get_repo_info(owner, repo):
-    """Hole Informationen über ein Repository"""
     url = f'{BASE_URL}/repos/{owner}/{repo}'
-    response = requests.get(url, headers=headers)
+    response = make_request(url)
     return response.json() if response.status_code == 200 else None
 
+def get_commit_frequency(owner, repo):
+    url = f'{BASE_URL}/repos/{owner}/{repo}/stats/commit_activity'
+    response = make_request(url)
+    if response.status_code == 200:
+        data = response.json()
+        total_commits = sum(week['total'] for week in data)
+        return total_commits / len(data) if len(data) > 0 else 0
+    return 0
+
 def is_repo_outdated(repo_info):
-    """Überprüfe, ob ein Repository veraltet ist"""
     if not repo_info:
         return False
-
     last_push = datetime.strptime(repo_info['pushed_at'], '%Y-%m-%dT%H:%M:%SZ')
-    now = datetime.utcnow()
-
-    # Repository gilt als veraltet, wenn der letzte Push mehr als 1 Jahr zurückliegt
-    return (now - last_push) > timedelta(days=365)
+    return (datetime.utcnow() - last_push) > timedelta(days=365)
 
 def is_repo_broken(repo_info):
-    """Überprüfe, ob ein Repository möglicherweise defekt ist"""
     if not repo_info:
         return False
-
     last_push = datetime.strptime(repo_info['pushed_at'], '%Y-%m-%dT%H:%M:%SZ')
-    now = datetime.utcnow()
     has_open_issues = repo_info['open_issues_count'] > 10
-    no_recent_commits = (now - last_push) > timedelta(days=180)
-
+    no_recent_commits = (datetime.utcnow() - last_push) > timedelta(days=180)
     return has_open_issues and no_recent_commits
 
 def check_repository(repo_info):
-    """Überprüfe ein Repository auf Veralterung und mögliche Defekte"""
-    if is_repo_outdated(repo_info):
-        print(f"{repo_info['full_name']} scheint veraltet zu sein. Letzter Push: {repo_info['pushed_at']}")
-    
-    if is_repo_broken(repo_info):
-        print(f"{repo_info['full_name']} könnte defekt sein. Es hat offene Issues, aber keine kürzlichen Commits.")
-    
-    print(f"  Sterne: {repo_info['stargazers_count']}")
-    print(f"  Offene Issues: {repo_info['open_issues_count']}")
-    print(f"  URL: {repo_info['html_url']}")
-    print()
+    result = {
+        "name": repo_info['full_name'],
+        "url": repo_info['html_url'],
+        "stars": repo_info['stargazers_count'],
+        "open_issues": repo_info['open_issues_count'],
+        "last_push": repo_info['pushed_at'],
+        "is_outdated": is_repo_outdated(repo_info),
+        "is_broken": is_repo_broken(repo_info),
+        "commit_frequency": get_commit_frequency(repo_info['owner']['login'], repo_info['name'])
+    }
+    return result
 
-def main():
-    query = 'stars:>100'  # Beispiel: Repos mit mehr als 100 Sternen
+def main(args):
+    query = args.query
     repos = search_repos(query)
+    results = []
     
     for repo in repos:
-        check_repository(repo)
+        result = check_repository(repo)
+        results.append(result)
+        print(f"Überprüft: {result['name']}")
+        print(f"  URL: {result['url']}")
+        print(f"  Sterne: {result['stars']}")
+        print(f"  Offene Issues: {result['open_issues']}")
+        print(f"  Letzter Push: {result['last_push']}")
+        print(f"  Veraltet: {'Ja' if result['is_outdated'] else 'Nein'}")
+        print(f"  Möglicherweise defekt: {'Ja' if result['is_broken'] else 'Nein'}")
+        print(f"  Durchschnittliche wöchentliche Commits: {result['commit_frequency']:.2f}")
+        print()
+
+    if args.output:
+        with open(args.output, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"Ergebnisse wurden in {args.output} gespeichert.")
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="GitHub Repository Checker")
+    parser.add_argument("--query", default="stars:>100", help="Suchabfrage für Repositories")
+    parser.add_argument("--output", help="Ausgabedatei für die Ergebnisse (JSON)")
+    args = parser.parse_args()
+    main(args)
