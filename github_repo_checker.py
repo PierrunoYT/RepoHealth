@@ -28,10 +28,24 @@ def make_request(url):
             return make_request(url)
     return response
 
-def search_repos(query, sort='updated', order='asc', per_page=100):
+def search_repos(query, sort='updated', order='asc', per_page=100, max_repos=1000):
     url = f'{BASE_URL}/search/repositories?q={query}&sort={sort}&order={order}&per_page={per_page}'
-    response = make_request(url)
-    return response.json()['items'] if response.status_code == 200 else []
+    all_repos = []
+    page = 1
+
+    while len(all_repos) < max_repos:
+        response = make_request(f"{url}&page={page}")
+        if response.status_code != 200:
+            break
+        
+        repos = response.json()['items']
+        if not repos:
+            break
+        
+        all_repos.extend(repos)
+        page += 1
+
+    return all_repos[:max_repos]
 
 def get_repo_info(owner, repo):
     url = f'{BASE_URL}/repos/{owner}/{repo}'
@@ -76,13 +90,13 @@ def check_repository(repo_info):
 
 def main(args):
     query = args.query
-    repos = search_repos(query)
+    repos = search_repos(query, max_repos=args.max_repos)
     results = []
     
-    for repo in repos:
+    for i, repo in enumerate(repos, 1):
         result = check_repository(repo)
         results.append(result)
-        print(f"Überprüft: {result['name']}")
+        print(f"Überprüft: {result['name']} ({i}/{len(repos)})")
         print(f"  URL: {result['url']}")
         print(f"  Sterne: {result['stars']}")
         print(f"  Offene Issues: {result['open_issues']}")
@@ -101,5 +115,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="GitHub Repository Checker")
     parser.add_argument("--query", default="stars:>100", help="Suchabfrage für Repositories")
     parser.add_argument("--output", help="Ausgabedatei für die Ergebnisse (JSON)")
+    parser.add_argument("--max_repos", type=int, default=100, help="Maximale Anzahl der zu überprüfenden Repositories")
     args = parser.parse_args()
     main(args)
