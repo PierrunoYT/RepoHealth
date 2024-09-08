@@ -28,7 +28,7 @@ def make_request(url):
             return make_request(url)
     return response
 
-def search_repos(query, sort='updated', order='asc', per_page=100, max_repos=1000):
+def search_repos(query, sort='updated', order='desc', per_page=100, max_repos=1000):
     url = f'{BASE_URL}/search/repositories?q={query}&sort={sort}&order={order}&per_page={per_page}'
     all_repos = []
     page = 1
@@ -42,8 +42,25 @@ def search_repos(query, sort='updated', order='asc', per_page=100, max_repos=100
         if not repos:
             break
         
-        all_repos.extend(repos)
+        # Filter repositories based on the query date range
+        if 'created:' in query or 'pushed:' in query:
+            date_range = query.split(':')[-1].split('..')
+            start_date = datetime.strptime(date_range[0], '%Y-%m-%d')
+            end_date = datetime.strptime(date_range[1], '%Y-%m-%d')
+            
+            filtered_repos = [
+                repo for repo in repos
+                if start_date <= datetime.strptime(repo['created_at' if 'created:' in query else 'pushed_at'], '%Y-%m-%dT%H:%M:%SZ') <= end_date
+            ]
+            
+            all_repos.extend(filtered_repos)
+        else:
+            all_repos.extend(repos)
+        
         page += 1
+        
+        if len(all_repos) >= max_repos:
+            break
 
     return all_repos[:max_repos]
 
